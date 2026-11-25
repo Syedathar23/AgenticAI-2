@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import FarmForm from "./FarmForm";
 import {
   soilCropAgent,
   waterAgent,
@@ -70,7 +71,11 @@ export default function App() {
   );
   const [keyInput, setKeyInput] = useState("");
   const [keySet, setKeySet] = useState(() => !!(localStorage.getItem("gemini_key") || ENV_KEY));
-  const [query, setQuery] = useState("");
+
+  // Current View: "form" | "control-room"
+  const [currentView, setCurrentView] = useState("form");
+  const [farmDetails, setFarmDetails] = useState(null);
+
   const [running, setRunning] = useState(false);
   const [blackboard, setBlackboard] = useState([]);
   const [riskData, setRiskData] = useState(null);
@@ -104,8 +109,13 @@ export default function App() {
   const setStatus = (agent, status) =>
     setAgentStatus((prev) => ({ ...prev, [agent]: status }));
 
-  const run = async () => {
-    if (!query.trim() || !apiKey) return;
+  const runAdvisoryPipeline = async (farmData) => {
+    const activeKey = apiKey || localStorage.getItem("gemini_key") || ENV_KEY;
+    if (!activeKey) {
+      alert("Please provide a Gemini API Key in the top right to start the advisory board.");
+      return;
+    }
+
     setRunning(true);
     setBlackboard([]);
     setRiskData(null);
@@ -113,63 +123,83 @@ export default function App() {
     setLog([]);
     setAgentStatus({ soil: "idle", water: "idle", pest: "idle", risk: "idle", coord: "idle" });
 
+    // Format farmer inputs into structured telemetry prompt
+    const farmerTelemetry = `
+=== FARM TELEMETRY & FIELD INTAKE ===
+• Location: ${farmData.location || "Unspecified"}
+• Cultivating Crop: ${farmData.crop || "Unspecified"}
+• Land / Area: ${farmData.farmSize || "Not specified"}
+• Temperature / Climate: ${farmData.temperature || "Not specified"}
+• Water Availability: ${farmData.waterAvailability || "Not specified"}
+• Last Irrigation / Rain: ${farmData.lastIrrigated || "Not specified"}
+• Soil Characteristics: ${farmData.soilType || "Not specified"}
+• Observed Symptoms / Pests: ${farmData.observedIssues || "None reported"}
+• Detailed Farm Context: ${farmData.detailedNotes || "None"}
+=====================================`;
+
     const board = [];
 
     try {
       /* ── Step 1: Soil & Crop Agent ── */
-      addLog("🌱 Soil & Crop Specialist analyzing...");
+      addLog("🌱 Soil & Crop Specialist reading telemetry...");
       setStatus("soil", "running");
-      const soilResult = await soilCropAgent(apiKey, query);
+      const soilResult = await soilCropAgent(activeKey, farmerTelemetry);
       board.push(soilResult);
       setBlackboard([...board]);
       setStatus("soil", "done");
-      addLog("✅ Soil & Crop Specialist wrote to blackboard.");
+      addLog("✅ Soil & Crop Specialist posted to blackboard.");
 
       /* ── Step 2: Water Agent ── */
-      addLog("💧 Water & Irrigation Specialist analyzing...");
+      addLog("💧 Water & Irrigation Specialist assessing board...");
       setStatus("water", "running");
-      const waterResult = await waterAgent(apiKey, query, board);
+      const waterResult = await waterAgent(activeKey, farmerTelemetry, board);
       board.push(waterResult);
       setBlackboard([...board]);
       setStatus("water", "done");
-      addLog("✅ Water Specialist wrote to blackboard.");
+      addLog("✅ Water Specialist posted to blackboard.");
 
       /* ── Step 3: Pest Agent ── */
-      addLog("🐛 Pest & Disease Specialist analyzing...");
+      addLog("🐛 Pest & Disease Specialist scanning risks...");
       setStatus("pest", "running");
-      const pestResult = await pestAgent(apiKey, query, board);
+      const pestResult = await pestAgent(activeKey, farmerTelemetry, board);
       board.push(pestResult);
       setBlackboard([...board]);
       setStatus("pest", "done");
-      addLog("✅ Pest Specialist wrote to blackboard.");
+      addLog("✅ Pest Specialist posted to blackboard.");
 
       /* ── Step 4: Risk Alert Agent ── */
-      addLog("⚠️ Risk Alert Agent scanning for hazards...");
+      addLog("⚠️ Risk Alert Agent scanning environmental hazards...");
       setStatus("risk", "running");
-      const riskResult = await riskAlertAgent(apiKey, query, board);
+      const riskResult = await riskAlertAgent(activeKey, farmerTelemetry, board);
       setRiskData(riskResult);
       board.push(riskResult);
       setBlackboard([...board]);
       setStatus("risk", "done");
       if (riskResult.urgent) {
-        addLog("🚨 URGENT RISK DETECTED — alert placed on board!");
+        addLog(`🚨 URGENT RISK ALERT DETECTED [${riskResult.hazardType || "Hazard"}]`);
       } else {
-        addLog("✅ Risk Alert: No urgent hazards found.");
+        addLog("✅ Risk Alert: No extreme climatic hazards detected.");
       }
 
       /* ── Step 5: Coordinator ── */
-      addLog("🧠 Advisor Coordinator compiling final advisory...");
+      addLog("🧠 Advisor Coordinator compiling unified advisory...");
       setStatus("coord", "running");
-      const advisory = await coordinatorAgent(apiKey, query, board, riskResult);
+      const advisory = await coordinatorAgent(activeKey, farmerTelemetry, board, riskResult);
       setFinalAdvisory(advisory);
       setStatus("coord", "done");
-      addLog("🎉 Final advisory ready for the farmer!");
+      addLog("🎉 Comprehensive advisory synthesized successfully!");
     } catch (err) {
       addLog(`❌ Error: ${err.message}`);
       console.error(err);
     }
 
     setRunning(false);
+  };
+
+  const handleFormSubmit = (data) => {
+    setFarmDetails(data);
+    setCurrentView("control-room");
+    runAdvisoryPipeline(data);
   };
 
   const agents = [
@@ -185,13 +215,30 @@ export default function App() {
       {/* ── Header ── */}
       <header className="header">
         <div className="header-inner">
-          <div className="logo">
+          <div className="logo" onClick={() => setCurrentView("form")} style={{ cursor: "pointer" }}>
             <span className="logo-icon">🌾</span>
             <div>
               <h1>Agricultural Advisory Control Room</h1>
               <p>Blackboard Multi-Agent System powered by Gemini AI</p>
             </div>
           </div>
+
+          <div className="header-nav">
+            <button
+              className={`nav-tab-btn ${currentView === "form" ? "active" : ""}`}
+              onClick={() => setCurrentView("form")}
+            >
+              📝 Farm Intake Form
+            </button>
+            <button
+              className={`nav-tab-btn ${currentView === "control-room" ? "active" : ""}`}
+              onClick={() => setCurrentView("control-room")}
+            >
+              📊 Advisory Control Room
+              {running && <span className="running-badge-mini">Live</span>}
+            </button>
+          </div>
+
           {!keySet ? (
             <div className="key-box">
               <input
@@ -218,168 +265,189 @@ export default function App() {
       </header>
 
       <main className="main">
-        {/* ── Input Panel ── */}
-        <section className="input-section">
-          <label className="input-label">📋 Describe your farming situation</label>
-          <textarea
-            className="input-textarea"
-            rows={4}
-            placeholder="e.g. I have 5 acres of wheat in Rajasthan. It's very hot and dry lately, and I noticed some yellowing leaves and tiny insects on the plants. I last watered 10 days ago..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            disabled={running}
-          />
-          <button
-            className={`btn-run ${running ? "loading" : ""}`}
-            onClick={run}
-            disabled={running || !query.trim() || !keySet}
-          >
-            {running ? (
-              <><span className="spinner" /> Agents Working...</>
-            ) : (
-              <><span>🚀</span> Get Advisory</>
-            )}
-          </button>
-        </section>
-
-        <div className="columns">
-          {/* ── Left: Agents + Log ── */}
-          <div className="left-col">
-            <div className="panel">
-              <h2 className="panel-title">🤖 Specialist Agents</h2>
-              <p className="panel-sub">Each agent reads the farmer input and/or the shared blackboard, then writes its findings.</p>
-              <div className="agents-list">
-                {agents.map((a) => (
-                  <AgentCard
-                    key={a.key}
-                    icon={a.icon}
-                    name={a.name}
-                    color={a.color}
-                    status={agentStatus[a.key]}
-                    data={a.data}
-                  />
-                ))}
+        {currentView === "form" ? (
+          <FarmForm onSubmit={handleFormSubmit} initialData={farmDetails} />
+        ) : (
+          <div className="control-room-view">
+            {/* Farm Profile Header Summary */}
+            {farmDetails && (
+              <div className="farm-summary-bar">
+                <div className="summary-col">
+                  <span className="summary-label">Farm Location</span>
+                  <strong className="summary-val">📍 {farmDetails.location}</strong>
+                </div>
+                <div className="summary-col">
+                  <span className="summary-label">Cultivating</span>
+                  <strong className="summary-val">🌱 {farmDetails.crop} ({farmDetails.farmSize || "Size N/A"})</strong>
+                </div>
+                <div className="summary-col">
+                  <span className="summary-label">Weather / Temp</span>
+                  <strong className="summary-val">🌡️ {farmDetails.temperature || "Normal"}</strong>
+                </div>
+                <div className="summary-col">
+                  <span className="summary-label">Water Status</span>
+                  <strong className="summary-val">💧 {farmDetails.waterAvailability}</strong>
+                </div>
+                <div className="summary-actions">
+                  <button
+                    className="btn-edit-farm"
+                    onClick={() => setCurrentView("form")}
+                  >
+                    ✏️ Edit Farm Details
+                  </button>
+                  <button
+                    className="btn-re-run"
+                    disabled={running}
+                    onClick={() => runAdvisoryPipeline(farmDetails)}
+                  >
+                    🔄 Re-run Advisory
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
 
-            {/* Activity Log */}
-            <div className="panel log-panel">
-              <h2 className="panel-title">📡 Activity Log</h2>
-              <div className="log-box" ref={logRef}>
-                {log.length === 0 ? (
-                  <p className="log-empty">Waiting for farmer query...</p>
-                ) : (
-                  log.map((l, i) => <div key={i} className="log-line">{l}</div>)
+            <div className="columns">
+              {/* ── Left: Specialist Agents + Log ── */}
+              <div className="left-col">
+                <div className="panel">
+                  <h2 className="panel-title">🤖 Specialist Agents</h2>
+                  <p className="panel-sub">Each specialist reads farm telemetry & blackboard records, then posts structured diagnosis.</p>
+                  <div className="agents-list">
+                    {agents.map((a) => (
+                      <AgentCard
+                        key={a.key}
+                        icon={a.icon}
+                        name={a.name}
+                        color={a.color}
+                        status={agentStatus[a.key]}
+                        data={a.data}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Activity Log */}
+                <div className="panel log-panel">
+                  <h2 className="panel-title">📡 Blackboard Activity Log</h2>
+                  <div className="log-box" ref={logRef}>
+                    {log.length === 0 ? (
+                      <p className="log-empty">Waiting to initiate blackboard cycle...</p>
+                    ) : (
+                      log.map((l, i) => <div key={i} className="log-line">{l}</div>)
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* ── Right: Blackboard + Advisory ── */}
+              <div className="right-col">
+                {/* Risk Alert Banner */}
+                {riskData?.urgent && (
+                  <div className="risk-banner">
+                    <div className="risk-banner-title">
+                      <span>🚨</span>
+                      <span>URGENT RISK ALERT: {riskData.hazardType || "Harmful Condition"}</span>
+                    </div>
+                    <p className="risk-warning">{riskData.warning}</p>
+                    {riskData.immediateAction && (
+                      <p className="risk-action"><strong>Emergency Action:</strong> {riskData.immediateAction}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Blackboard */}
+                <div className="panel">
+                  <h2 className="panel-title">📋 Shared Advisory Blackboard</h2>
+                  <p className="panel-sub">Central structured data board shared among all specialist agents.</p>
+                  {blackboard.length === 0 ? (
+                    <div className="empty-state">
+                      <span className="empty-icon">📋</span>
+                      <p>No specialist postings yet. Submit the farm form to populate the blackboard.</p>
+                    </div>
+                  ) : (
+                    <div className="blackboard">
+                      {blackboard.map((entry, i) => (
+                        <div key={i} className="bb-entry">
+                          <div className="bb-agent-name">
+                            {agentIcon(entry.agent)} {entry.agent}
+                            {entry.urgent !== undefined && (
+                              <span className={`bb-badge ${entry.urgent ? "urgent" : "safe"}`}>
+                                {entry.urgent ? "🚨 URGENT RISK" : "✅ Safe Conditions"}
+                              </span>
+                            )}
+                          </div>
+                          {Object.entries(entry)
+                            .filter(([k]) => !["agent", "parseError", "raw"].includes(k))
+                            .map(([k, v]) => (
+                              <div key={k} className="bb-row">
+                                <span className="bb-key">{camel(k)}:</span>
+                                <span className="bb-val">
+                                  {Array.isArray(v) ? v.join(", ") : String(v)}
+                                </span>
+                              </div>
+                            ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Final Advisory */}
+                {finalAdvisory && (
+                  <div className="panel advisory-panel">
+                    <h2 className="panel-title">🧠 Plain-Language Farm Advisory</h2>
+                    <p className="panel-sub">Synthesized by the Advisor Coordinator from all specialist blackboard evaluations.</p>
+                    <div className="advisory-content">
+                      {finalAdvisory.split("\n").filter(Boolean).map((para, i) => (
+                        <p key={i}>{para}</p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* How it works info if idle */}
+                {!running && blackboard.length === 0 && (
+                  <div className="panel how-panel">
+                    <h2 className="panel-title">🏗️ Blackboard Architecture Lifecycle</h2>
+                    <div className="arch-flow">
+                      <div className="arch-step">
+                        <span className="arch-num">1</span>
+                        <div>
+                          <strong>Farmer Telemetry</strong>
+                          <p>Location, crop, weather, soil, and water stress factors from the Intake Form.</p>
+                        </div>
+                      </div>
+                      <div className="arch-arrow">↓</div>
+                      <div className="arch-step">
+                        <span className="arch-num">2</span>
+                        <div>
+                          <strong>Specialist Analysis & Shared Board</strong>
+                          <p>Soil, Water, and Pest agents iteratively post structured findings to the shared blackboard.</p>
+                        </div>
+                      </div>
+                      <div className="arch-arrow">↓</div>
+                      <div className="arch-step">
+                        <span className="arch-num">3</span>
+                        <div>
+                          <strong>Risk Alert Interceptor</strong>
+                          <p>Flags immediate hazards (heatwave, frost, rot) and prepends urgent warnings.</p>
+                        </div>
+                      </div>
+                      <div className="arch-arrow">↓</div>
+                      <div className="arch-step">
+                        <span className="arch-num">4</span>
+                        <div>
+                          <strong>Advisor Coordinator</strong>
+                          <p>Synthesizes comprehensive, farmer-friendly guidance in natural language.</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
           </div>
-
-          {/* ── Right: Blackboard + Advisory ── */}
-          <div className="right-col">
-            {/* Risk Alert Banner */}
-            {riskData?.urgent && (
-              <div className="risk-banner">
-                <div className="risk-banner-title">
-                  <span>🚨</span>
-                  <span>URGENT RISK ALERT — {riskData.hazardType}</span>
-                </div>
-                <p className="risk-warning">{riskData.warning}</p>
-                <p className="risk-action"><strong>Act Now:</strong> {riskData.immediateAction}</p>
-              </div>
-            )}
-
-            {/* Blackboard */}
-            <div className="panel">
-              <h2 className="panel-title">📋 Shared Blackboard</h2>
-              <p className="panel-sub">All agent findings are written here and read by subsequent agents.</p>
-              {blackboard.length === 0 ? (
-                <div className="empty-state">
-                  <span className="empty-icon">📋</span>
-                  <p>Blackboard is empty. Submit a query to start.</p>
-                </div>
-              ) : (
-                <div className="blackboard">
-                  {blackboard.map((entry, i) => (
-                    <div key={i} className="bb-entry">
-                      <div className="bb-agent-name">
-                        {agentIcon(entry.agent)} {entry.agent}
-                        {entry.urgent !== undefined && (
-                          <span className={`bb-badge ${entry.urgent ? "urgent" : "safe"}`}>
-                            {entry.urgent ? "🚨 URGENT" : "✅ Safe"}
-                          </span>
-                        )}
-                      </div>
-                      {Object.entries(entry)
-                        .filter(([k]) => !["agent", "parseError", "raw"].includes(k))
-                        .map(([k, v]) => (
-                          <div key={k} className="bb-row">
-                            <span className="bb-key">{camel(k)}:</span>
-                            <span className="bb-val">
-                              {Array.isArray(v) ? v.join(", ") : String(v)}
-                            </span>
-                          </div>
-                        ))}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Final Advisory */}
-            {finalAdvisory && (
-              <div className="panel advisory-panel">
-                <h2 className="panel-title">🧠 Final Advisory</h2>
-                <p className="panel-sub">Compiled by the Advisor Coordinator from all specialist findings.</p>
-                <div className="advisory-content">
-                  {finalAdvisory.split("\n").filter(Boolean).map((para, i) => (
-                    <p key={i}>{para}</p>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* How it works */}
-            {!running && blackboard.length === 0 && (
-              <div className="panel how-panel">
-                <h2 className="panel-title">🏗️ Blackboard Architecture</h2>
-                <div className="arch-flow">
-                  <div className="arch-step">
-                    <span className="arch-num">1</span>
-                    <div>
-                      <strong>Farmer Input</strong>
-                      <p>You describe your crop, weather, and problems.</p>
-                    </div>
-                  </div>
-                  <div className="arch-arrow">↓</div>
-                  <div className="arch-step">
-                    <span className="arch-num">2</span>
-                    <div>
-                      <strong>Specialist Agents</strong>
-                      <p>Soil, Water, and Pest agents each read and write to the shared blackboard.</p>
-                    </div>
-                  </div>
-                  <div className="arch-arrow">↓</div>
-                  <div className="arch-step">
-                    <span className="arch-num">3</span>
-                    <div>
-                      <strong>Risk Alert Agent</strong>
-                      <p>Scans all findings for urgent weather or hazard warnings.</p>
-                    </div>
-                  </div>
-                  <div className="arch-arrow">↓</div>
-                  <div className="arch-step">
-                    <span className="arch-num">4</span>
-                    <div>
-                      <strong>Advisor Coordinator</strong>
-                      <p>Reads the full blackboard and synthesizes a single plain-language advisory.</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+        )}
       </main>
 
       <footer className="footer">
